@@ -6,4 +6,5 @@ The Caltech10 CPU is an 8-bit Harvard-architecture, accumulator-based CPU. It ha
 registers (X and S) and a 13-bit program counter. All instructions are a single 16-bit word and almost all instructions
 execute in a single clock cycle.
 
-Authors: Zachary Pestrikov, Professor Glen George(Caltech)
+Author: Zachary Pestrikov
+Instructor: Professor Glen George(Caltech)
