@@ -1,0 +1,529 @@
+ MODULE      ControlUnit
+INTERFACE  (ProgramDB15..ProgramDB0, Flags7..Flags0, Reset, Clock 
+                        -> Op3..Op0, SelectAdd, FlagsEnable,
+                        AddSub, LoadFlags, InstructionControl2..InstructionControl0, InvertCarry,
+                        Off, AddressS, AddressX, Decrement, PreSelect, IncDecEnable,
+                        Load, DirectJMP, RelativeJMP, Normal,
+                        Hold1, Hold2, Read, Write, IR15..IR0,
+			CallUpper, CallLower, CallAddress15..CallAddress0, CallJMP, Return);
+
+TITLE      'Control Unit'
+
+
+" Description:  This module is the file for the control unit. The module generates the
+"               control signals by decoding the input instructions from the instruction
+"               register. The control signals are then sent out to the other modules
+"               along with the appropriate values of offsets.
+"
+" Inputs:       ProgramDB15..ProgramDB0        - program data bus - holds encoded instruction
+"		Flags7..Flags0	 - 8 Bit Status Register outputted from ALU
+"               Reset            - system reset
+"               Clock            - system clock
+"
+" Outputs:      
+"           ALU Control Signals:
+"               Op3..Op0   - Control signals for F-Block, Signifies the logical operator
+"               SelectAdd, Select Shift/Rot   - control signals for determining which result to select; from the adder, or the shifter/rotator(may be used later if I do extra credit)
+"               FlagsEnable  - control signal to signify whether to allow the carry, overflow flags to change
+"               AddSub - control signal to signify whether result is from adder(Active High) or F-block(active low)
+"		        LoadFlags - Signals to Load offset into flags
+"		        InvertCarry	-- Control Signal to determine whether or not to invert carry in subtract and decrement
+"               InstructionControl2..0 - Encoded Control Signals
+"               [000] => None
+"               [001] => Increment
+"               [010] => Decrement
+"               [011] => Adc
+"		[100] => SBB
+"		[110] => SB
+"		[111] => Hold Flags
+"           DAU Control Signals:
+"               Off         - Control Signal to set the offset to a value(inputted in offset7..offset0)
+"               AddressS    - control signal to write to the S register
+"               AddressX    - control signal to write to the X register
+"               Decrement   - control signal to signify decrement(active high) or increment(active low)
+"               PreSelect   - control signal to signify preincrement/decrement(active high) or postincrement/decrement(active low)
+"		        IncDecEnable - Enables the Data Address Output to increment or decrement
+"           PAU Control Signals:
+"               Load 		- Load the PC with some offset value
+"		Direct JMP      - Jump to a specified address
+"               Relative JMP    - Add the last eight bits of the instruction to the current address
+"               Normal          - just increment the program counter
+"               Hold1           - hold the upper 5 bits, replace the lower with the offset input
+"               Hold2           - hold the lower 8 bits, replace the upper with the lower 5 of the offset input
+"           Additional Control Signals:
+"               Read              - signals to read from the data space
+"               Write             - signals to write to the data space
+"		CallUpper	- Signals to load the upper bits of PC into the DataDB during the first part of CALL
+"		CallLower	- Signals to load the lower bits of PC into the DataDB during  the second part of CALL
+"		CallAddress	- Address to jump to on the last step of call
+"		CallJMP		- Enables to jump to CallAddress
+"		Return		- Sets the DataDB to the offset input to the PAU to the DataDB during RTS
+"		
+"	   IR15..IR0		- Instruction Register, Holds encoded instruction, changes with clock
+
+" Revision History:
+" 03/09/24   Zachary Pestrikov  Wrote File and Designed Logic for Control Signal Generation
+" 03/10/24	 Zachary Pestrikov  Edited Control Signals
+" 03/11/24   Zachary Pestrikov  Finalized Control Signals
+" 03/12/24	 Zachary Pestrikov  Finalized Documentation & Added CALL/RTS instructions
+
+
+
+" Pin/Signal Declarations
+
+" Inputs
+ProgramDB15..ProgramDB0     pin;   "instruction register
+Flags7..Flags0	pin;	"flags from ALU
+Reset			pin;	"input  system reset
+Clock           	pin;	"input  system clock
+
+
+" Outputs
+"ALU Control Signals
+Op3..Op0    pin;
+SelectAdd   pin;
+FlagsEnable  pin;
+AddSub pin;
+LoadFlags	pin;
+InstructionControl2..InstructionControl0	pin;
+InvertCarry	pin;
+CallAddress15..CallAddress0	pin	ISTYPE 'REG';
+CallJMP		pin;
+Return		pin;
+
+"DAU Control Signals
+Off pin;
+AddressS    pin;
+AddressX    pin;
+Decrement   pin;
+PreSelect   pin;
+IncDecEnable	pin;
+
+"PAU Control Signals
+DirectJMP  pin; "Control Signal for direct jump
+RelativeJMP    pin;"Control Signal for relative jump
+Normal      pin; "Control Signal for normal
+Hold1        pin; "1st Control Signal for hold
+Hold2		pin; "2nd Hold Control Signal
+Load	pin; "Load Signal
+
+"Additonal Control Signals
+Read    pin;
+Write   pin;
+CallUpper	pin;	
+CallLower	pin;
+
+IR15..IR0	pin	ISTYPE 'REG,KEEP';	"Instruction Register
+
+
+" Intermediate Terms
+Carry 		node;	"Carry flag is flags3
+Overflow 	node; 	"Overflow flag is flags2
+Sign		node;	"Signed flag is flags1
+Zero		node;	"Zero flag is flags0
+RTS		node;	"Defines RTS bits
+
+"State Bits
+Call1		node	ISTYPE 'REG';	"First state of call instruction; predecrement S, load upper bits of PC into DAB
+Call2		node	ISTYPE 'REG';	"Second state of call instruction; predecrement S, load lower bits of PC into DAB
+Call3		node	ISTYPE 'REG';	"Final state of call instruction; load the program counter
+Return1		node	ISTYPE 'REG';	"First state of return instruction; load lower bits of program counter with DAB, post increment S
+Return2		node	ISTYPE 'REG';	"Final state of return instruction load upper bits of PC with DAB, post increment S
+
+
+" Buses
+IR = [IR15..IR0];	"Instruction Register
+Flags = [Flags7..Flags0];	"Flags bus from ALU
+ProgramDB = [ProgramDB15..ProgramDB0];
+States = [Call1, Call2, Call3, Return1, Return2];	"Defines the state of the system
+CallAddress = [CallAddress15..CallAddress0];
+
+"Define the states, One-hot encoding
+RegularState 	= [0, 0, 0, 0, 0]; 
+Call1State	= [1, 0, 0, 0, 0];
+Call2State	= [0, 1, 0, 0, 0];
+Call3State	= [0, 0, 1, 0, 0];
+Return1State	= [0, 0, 0, 1, 0];
+Return2State 	= [0, 0, 0, 0, 1];
+
+
+EQUATIONS
+"Connect up module
+IR.CLK = Clock;
+IR.CLR = Reset;
+States.CLK = Clock;
+States.CLR = Reset;
+CallAddress.CLK = Clock;
+CallAddress.CLR = Reset;
+
+"Specify Flags for readability
+Carry = Flags3;
+Overflow = Flags2;
+Sign = Flags1;
+Zero = Flags0;
+
+RTS = !IR15 & !IR14 & !IR13 & IR12 & IR11 & IR10 & IR9 & IR8 & !IR7; "Encodes bits for RTS
+
+"FSM
+
+STATE_DIAGRAM States
+	STATE RegularState:
+
+IR = ProgramDB; " IR is just the incoming instrcution
+"Control Signals for non-call/rts state:
+
+"PAU Control Signals
+"Direct jump during JMP 
+DirectJMP = IR15 & IR14 & !IR13;	
+
+"Relative JMP, True if conditions of jump type are true
+RelativeJMP = (IR15 & !IR14 & IR11) & (
+		(!(IR13 # IR12 # IR10) & (!(IR9 # IR8 # Carry # Zero) # (IR9 & IR8 & (Carry # Zero)))) #	"JA, JBE, Rows1&2 in CPU Description
+		(!(IR13 # IR12) & IR10 & (!(IR9 # IR8 # Carry) # (IR9 & IR8 & Carry))) #	"JAE/JNC, JB/JC Rows3&4 in Description
+		(!(IR13 # IR10) & IR12 & (!(IR9 # IR8 # Sign) # (IR9 & IR8 & Sign))) #	"JNS, JS Rows5&6 in description
+		(!IR13 & IR12 & IR10 & (!(IR9 # IR8 # Zero) # (IR9 & IR8 & Zero))) #	"JE/JZ, JNE/JNZ	Rows7&8
+		(IR13 & !(IR12 # IR10) & (!(IR9 # IR8 # Overflow) # (IR9 & IR8 & Overflow))) #	"JNV, JV, Rows9&10
+		(IR13 & !IR12 & IR10 & ((!IR9 & !IR8 & ((Sign $ Overflow) # Zero)) # (IR9 & IR8 & (Sign !$ Overflow) & !Zero))) #	"JLE, JG	Rows11&12
+		(IR13 & IR12 & !IR10) & ((!IR9 & !IR8 & (Sign $ Overflow)) # (IR9 & IR8 & (Sign !$ Overflow)))); 	"JGE, JL, 	Rows13&14
+
+"Normal is just anything that's not a jump, call, or return
+Normal = ((!(IR15 & IR14) & "Not JMP, CALL
+	(!IR11 #
+	(!(IR15 & ((!IR10 & !IR9 & !IR8) # (!IR10 & IR9 & IR8) # (!IR9 & !IR8 & IR10) # (IR10 & IR9 & IR8)))))) #
+	(!RelativeJMP & IR15 & !IR14 & IR11)) &		"Not Direct JMPs
+	!RTS;		"Not RTS	
+
+"Hold1, Hold2 For RTS
+Hold1 = RTS;
+Hold2 = 0;
+
+"Load is just true during direct jump, or RTS
+Load = (IR15 & IR14 & !IR13) # RTS;
+
+
+"DAU Control Signals
+
+"Use the offset to add to the address source for the data address bus only when not using indexed addressing, dont use for popf or pushf
+Off = ((!IR15 & !(IR9 & IR8)) # (IR15 & !IR14 & !(!IR9 & IR8))) & !(!IR15 & !IR14 & !IR13 & !IR12 & IR9);
+
+"Select S when using address from S register. Only when using ALU, or loading/storing, or PUSHF OR POPF, or RTS
+AddressS = (!IR15 & IR9 & !IR8) # (IR15 & !IR10 & IR9) # (!(IR15 # IR14 # IR13 # IR12) & IR9) # RTS;
+
+"Select X when using address from X register
+AddressX = (!IR15 & !IR9 & IR8) # (IR15 & !IR14 & IR10 & IR9);
+
+"Decrement only happens when loading or storing, or PUSHF
+Decrement = (IR15 & !IR14 & IR11) # (!(IR15 # IR14 # IR13 # IR12) & IR11);
+
+"PreInc/Dec or PostInc/Dec only happen when loading or storing, or PUSHF
+PreSelect = (IR15 & !IR14 & !IR12 & IR9 & !IR8) # (!(IR15 # IR14 # IR13 # IR12) & IR11); 
+
+"S or X registers are only incremented or decremented when loading or storing, or PUSHF/POPF, RTS
+IncDecEnable = (IR15 & !IR14 & IR9 & !IR8) # (!(IR15 # IR14 # IR13 # IR12) & IR9) # RTS;
+
+
+"ALU Control Signals
+
+"Op3 is a control signal for selecting the result of the F-block, it is selected when A & B is true, It is high when loading an offset into the accumulator,
+"								
+Op3 = (IR15 & !IR14 & !IR13 & (!IR11 # (IR8 $ IR9))) 	"LD
+	# (!IR15 & IR14 & IR13 & !IR12)			"ADD, ADC
+	# (!IR15 & IR14 & IR13 & IR12)			"DEC, OR
+	# !(IR15 # IR14 # IR13 # IR12 # IR11 # IR10 # IR9)"INC
+	# (!IR15 & IR14 & !IR13 & IR12 & IR11)		"LSL
+	# (!IR15 & IR14 & !IR11 & IR10)	"AND, OR
+	# (!IR15 & IR14 & IR11 & IR10);	"TST
+
+"Op2 is a control signal for selecting the result of the F-Block representing A=1, B=0, it is high in the instructions:
+"					CMP, DEC, INC, LSL, OR, RLC, SUB, XOR
+Op2 = (!IR15 & IR14 & IR12) # !(IR11 # IR10 # IR9 # IR15 # IR14) # (!IR15 & !IR14 & IR13 & IR12) # (!IR15 & !IR14 & (IR13 $ IR12) & !(IR11 & IR10));
+
+"Op1 is a control signal for selecting the result of the F-Block representing A=0, B=1, it is high when loading the accumulator, and the instructions:
+"					ADD,ADC,NOT,OR,XOR
+Op1 = (IR15 & !(IR14 # IR13) & (!IR11 # (IR8 $ IR9))) # (!IR15 & IR14 & IR13 & (!IR11 # (!IR10 & !(IR8 & IR9)))) # (!IR15 & IR14 & (IR13 $ IR12) & IR11 & !IR10 & IR8) #
+	(!IR15 & !IR14 & IR11 & IR10 & !IR9)
+	# (!IR15 & !IR14 & !IR11 & IR10); "XOR
+
+"Op0 is a control signal for selecting the result of the F-Block represent A=0,B=0, it is high in the instructions:
+"					CMP, NOT, SUB, SUBB
+Op0 = (!IR15 & !IR14 & IR13 & (!IR10 # IR11)) #
+	(!IR15 & !IR14 & !IR13 & IR12 & !IR10); "SUB, SUBB;
+
+"SelectAdd is true for all operations that use the F-Block or Adder to output to the accumulator
+"		   XOR
+SelectAdd = ((IR15 & !IR14 & !IR13) & (!IR11 # (IR11 & (IR8 $ IR9)))) 		"LD
+		# (!IR15 & IR14 & IR13)						"ADD ADC, DEC, OR
+		# (!IR15 & IR14 & !IR13 & !IR12 & !IR11) 			"AND
+		# (!IR15 & !IR14 & !IR13 & !IR12 & !IR11 & !IR10 & !IR9)	"INC
+		# (!IR15 & IR14 & !IR13 & IR12) 				"LSL, RLC
+		# (!IR15 & !IR14 & IR11 & IR10 & !IR9) 				"NOT
+		# (!IR15 & !IR14 & !IR13 & IR12 & !IR10)			"SUB, SUBB
+		# (!IR15 & !IR14 & IR13 & IR12 & !IR11 & IR10); 		"XOR
+
+"Flags Enable => True when want C and Overflow to change => ADD,ADC,CMP,DEC,INC,LSL,RLC,SUB,SUBB, POPF
+FlagsEnable = (((IR11 & !IR10) # (!IR11 & !IR10 & !(!IR14 & !IR13 & !IR12 & IR9))) & !IR15) # (!IR15 & !IR14 & !IR13 & !IR12 & !IR11 & IR9);
+
+"AddSub - signifies to add the accumulator to something outputted from F-Block => ADD, ADC, CMP, LSL, RLC, SUB, SUBB
+AddSub = (!IR11 & !IR10 & !IR15 & (IR14 # IR13 # IR12)) # (IR11 & !IR10 & !IR15 & !(IR14 & IR13 & IR12));
+
+"Load Flags - Only true when loading the offset into the flags => only true for popf
+LoadFlags = !(IR15 # IR14 # IR13 # IR12 # IR11) & IR9;
+
+"               InstructionControl2..0 - Encoded Control Signals
+"               [000] => None
+"               [001] => Increment
+"               [010] => Decrement
+"               [011] => Adc
+"		[100] => SBB
+"		[110] => SB
+"		[111] => Hold Flags
+
+"InstructionControl2 = LD, CMP, SUB, NOP, PUSHF, ST, PUSHF, SUB, SUBB, CALL, RTS
+InstructionControl2 = (!IR15 & !IR14 & !IR11 & !IR10 & (IR13 # IR12)) # (IR15 & !IR14 & !IR13 & (!IR11 # (IR9 $ IR8))) # (!(IR15 # IR14 # IR13) & IR12 & IR11 & IR10)
+			# (!IR15 & !IR14 & !IR13 & !IR12 & IR11)		"PUSHF
+			# (!IR15 & !IR14 & !IR13 & IR12 & !IR10)	"SUB, SUBB
+			# (IR15) # RTS;	"Loads, stores, and jumps, and call, RTS
+"InstructionControl1 = LD, ADC, CMP, SUB, DEC, RLC, NOP, ST, PUSHF, SUB, CALL, RTS
+InstructionControl1 = (IR15 & !IR14 & !IR13 & (!IR11 # (IR9 $ IR8))) # (!IR15 & IR14 & (IR13 $ IR12) & !IR11) 
+	# (!IR11 & !IR10 & !IR15 & (IR14 # IR13 # IR12)) # (!IR15 & IR14 & IR13 & IR12 & IR11) # (!(IR15 # IR14 # IR13) & IR12 & IR11 & IR10)
+	# (!IR15 & !IR14 & !IR13 & !IR12 & IR11)  "PUSHF
+	# (!IR15 & !IR14 & !IR13 & IR12 & !IR11) "SUB
+	# (IR15) # RTS; "Loads, stores, and jumps, and call, RTS
+
+
+InstructionControl0 = (!IR15 & IR14 & (IR13 $ IR12) & !IR11)			"RLC, ADC  
+	# !(IR15 # IR14 # IR13 # IR12 # IR11 # IR10 # IR9)		"INC 
+	# (!(IR15 # IR14 # IR13) & IR12 & IR11 & IR10)			"NOP
+	# (!IR15 & !IR14 & !IR13 & !IR12 & IR11)			"PUSHF
+	# (IR15) # RTS;						"Loads, stores, and jumps, and call, RTS
+"InvertCarry - used for active low borrow in subtract => CMP, DEC, SUB, SUBB
+InvertCarry = (!IR15 & !IR14 & IR13 & !IR11 & !IR10) # (!IR15 & IR14 & IR13 & IR12 & IR11) # (!IR15 & !IR14 & !IR13 & IR12 & !(IR11 & IR10));
+
+"Additional Control Signals
+"RD Instruction is only true when loading data from memory, or using data from memory in an ALU instruction, or popf, RTS
+Read = ((IR15 & !IR14 & !IR13) & (!IR11 # (IR9 & !IR8)))"LD from memory" # (!(IR15 # IR14 # IR13 # IR12 # IR11) & IR9)"POPF" # 
+	(!IR15 & !(IR9 & IR8) & !((!IR14 & !IR13 & !IR12) # (IR14 & !IR13 & IR12) # (!IR14 & IR13 & !IR12))) # "ALU operation that reads from memory!(inc, rlc, lsl, not)
+	RTS;	"RTS reads data from address in S
+
+"Write is only true when storing data, or PUSHF
+Write = ((IR15 & !IR14 & IR13) & (!IR11 # (IR9 & !IR8)))"ST" # (!(IR15 # IR14 # IR13 # IR12) & IR11)"PUSHF";
+
+"The address to jump to comes from the program data bus, and should hold once call has begun
+CallAddress = (ProgramDB[15..0] & !(CallAddress15 & CallAddress14 & CallAddress13)) 
+	# (CallAddress & CallAddress15 & CallAddress14 & CallAddress13);	"holds when in a call address state, releases afterwards					
+CallJMP = 0; 	"CALL not in effect
+Return = RTS;	
+
+IF (IR15 & IR14 & IR13) THEN Call1State	"Call
+ELSE IF (!IR15 & !IR14 & !IR13 & IR12 & IR11 & IR10 & !IR7) THEN Return1State "RTS
+ELSE RegularState;	"If not call or return, then it is a normal instruction
+
+STATE Call1State:
+" Outputs
+"ALU Control Signals - hold the flags
+[Op3..Op0]   	= 0;
+SelectAdd   	= 0;
+FlagsEnable 	= 0;
+AddSub 		= 0;
+LoadFlags	= 0;
+[InstructionControl2..InstructionControl0]	= [1,1,1]; "Want to hold the flags
+InvertCarry	= 0;
+
+"DAU Control Signals - Predecrement S with no offset
+Off 		= 0;
+AddressS    	= 1;	
+AddressX   	= 0;
+Decrement   	= 1;	
+PreSelect   	= 1;	
+IncDecEnable	= 1;	
+
+"PAU Control Signals - PC should hold
+DirectJMP  	= 0;
+RelativeJMP     = 0;
+Normal          = 0; 
+Hold1           = 0;
+Hold2		= 0;
+Load		= 0;
+
+"Additonal Control Signals	- writing to the address held in S, first state => call upper
+Read    	= 0;
+Write   	= 1;
+CallUpper	= 1;
+CallLower	= 0;
+CallJMP		= 0;
+CallAddress 	= CallAddress;
+Return 		= 0;
+
+"CALL has no effect on Instruction Register
+IR 		= ProgramDB;
+
+GOTO Call2State;
+
+STATE Call2State:
+" Outputs
+"ALU Control Signals - hold the flags
+[Op3..Op0]   	= 0;
+SelectAdd   	= 0;
+FlagsEnable 	= 0;
+AddSub 		= 0;
+LoadFlags	= 0;
+[InstructionControl2..InstructionControl0]	= [1,1,1]; "Want to hold the flags
+InvertCarry	= 0;
+
+"DAU Control Signals - Predecrement S with no offset
+Off 		= 0;
+AddressS    	= 1;	
+AddressX   	= 0;
+Decrement   	= 1;	
+PreSelect   	= 1;	
+IncDecEnable	= 1;	
+
+"PAU Control Signals - PC should do a direct jump on the next step
+DirectJMP  	= 1;
+RelativeJMP     = 0;
+Normal          = 0; 
+Hold1           = 0;
+Hold2		= 0;
+Load		= 1;
+
+"Additonal Control Signals	- writing to the address held in S, second state => call lower
+Read    	= 0;
+Write   	= 1;
+CallUpper	= 0;
+CallLower	= 1;
+CallJMP		= 1;
+CallAddress 	= CallAddress;
+Return 		= 0;
+
+"CALL has no effect on Instruction Register
+IR 		= ProgramDB;
+
+GOTO Call3State;
+
+STATE Call3State:
+" Outputs
+"ALU Control Signals - hold the flags
+[Op3..Op0]   	= 0;
+SelectAdd   	= 0;
+FlagsEnable 	= 0;
+AddSub 		= 0;
+LoadFlags	= 0;
+[InstructionControl2..InstructionControl0]	= [1,1,1]; "Want to hold the flags
+InvertCarry	= 0;
+
+"DAU Control Signals - No affect on registers
+Off 		= 0;
+AddressS    	= 0;	
+AddressX   	= 0;
+Decrement   	= 0;	
+PreSelect   	= 0;	
+IncDecEnable	= 0;	
+
+"PAU Control Signals - perform jump as specified on previous step, and increment PC on next step
+DirectJMP  	= 0;
+RelativeJMP     = 0;
+Normal          = 1; 
+Hold1           = 0;
+Hold2		= 0;
+Load		= 0;
+
+"Additonal Control Signals	- go back to regular state 
+Read    	= 0;
+Write   	= 0;
+CallUpper	= 0;
+CallLower	= 0;		
+CallJMP		= 0;
+CallAddress 	= CallAddress & 0;
+Return 		= 0;
+
+"CALL has no effect on Instruction Register
+IR 		= ProgramDB;
+
+GOTO RegularState;	"Finished with Call
+
+STATE Return1State:
+" Outputs
+"ALU Control Signals - hold the flags
+[Op3..Op0]   	= 0;
+SelectAdd   	= 0;
+FlagsEnable 	= 0;
+AddSub 		= 0;
+LoadFlags	= 0;
+[InstructionControl2..InstructionControl0]	= [1,1,1]; "Want to hold the flags
+InvertCarry	= 0;
+
+"DAU Control Signals - post increment S
+Off 		= 0;
+AddressS    	= 1;	
+AddressX   	= 0;
+Decrement   	= 0;	
+PreSelect   	= 0;	
+IncDecEnable	= 1;	
+
+"PAU Control Signals - hold lower bits, load upper ones
+DirectJMP  	= 0;
+RelativeJMP     = 0;
+Normal          = 0; 
+Hold1           = 0;
+Hold2		= 1;
+Load		= 1;
+
+"Additonal Control Signals	- reading from address in S on next return state
+Read    	= 1;
+Write   	= 0;
+CallUpper	= 0;
+CallLower	= 0;
+CallJMP		= 0;
+CallAddress 	= CallAddress;
+Return 		= 1;
+
+"CALL has no effect on Instruction Register
+IR 		= ProgramDB;
+
+GOTO Return2State;	
+
+STATE Return2State:
+" Outputs
+"ALU Control Signals - hold the flags
+[Op3..Op0]   	= 0;
+SelectAdd   	= 0;
+FlagsEnable 	= 0;
+AddSub 		= 0;
+LoadFlags	= 0;
+[InstructionControl2..InstructionControl0]	= [1,1,1]; "Want to hold the flags
+InvertCarry	= 0;
+
+"DAU Control Signals - prepare for next instruction
+Off 		= 0;
+AddressS    	= 0;	
+AddressX   	= 0;
+Decrement   	= 0;	
+PreSelect   	= 0;	
+IncDecEnable	= 0;	
+
+"PAU Control Signals - increment PC on next instruction
+DirectJMP  	= 0;
+RelativeJMP     = 0;
+Normal          = 1; 
+Hold1           = 0;
+Hold2		= 0;
+Load		= 0;
+
+"Additonal Control Signals	- prepare for next instruction
+Read    	= 0;
+Write   	= 0;
+CallUpper	= 0;
+CallLower	= 0;
+CallJMP		= 0;
+CallAddress 	= CallAddress;
+Return 		= 0;
+
+"CALL has no effect on Instruction Register
+IR 		= ProgramDB;
+
+GOTO RegularState;		"done with RTS	
+	
+
+
+
+END  ControlUnit

@@ -1,0 +1,101 @@
+MODULE      ProgramAccess
+INTERFACE   (Offset7..Offset0, Direct12..Direct0,
+                          Load, DirectJMP, RelativeJMP, Reset, Normal,
+                          Clock, Hold1, Hold2
+                          -> ProgAddr12..ProgAddr0, PC12..PC0);
+
+TITLE      'Program Memory Access Unit;'
+
+
+" Description:  This implements a module for the Program Memory Address Unit for EECSaHW6
+"
+" Inputs:      Offset7..Offset0 -Offsets for the addresses
+"               Clock    - system clock
+"               Direct12..Direct0 -Direct Address
+"               Direct JMP      - Jump to a specified address
+"               Relative JMP    - Add the last eight bits of the instruction to the current address
+"               Reset    - system reset
+"               Normal          - just increment the program counter
+"               Hold1           - hold the upper 5 bits, replace the lower with the offset input
+"               Hold2           - hold the lower 8 bits, replace the upper with the lower 5 of the offset input
+"
+" Outputs:     ProgAddr12..ProgAddr0  - Program Address Bus Outputs 
+"              PC12..PC0 - Program Counter Outputs
+
+
+" Revision History:
+" 02/20/2024    Zachary Pestrikov   Wrote File for Module
+" 02/27/2024    Zachary Pestrikov   Debugged Code
+
+
+
+" Pin/Signal Declarations
+
+" Inputs
+Offset7..Offset0       pin;"Offsets for the addresses
+Direct12..Direct0         pin; "Input address
+DirectJMP  pin; "Control Signal for direct jump
+RelativeJMP    pin;"Control Signal for relative jump
+Reset    pin; "Control Signal for reset
+Normal      pin; "Control Signal for normal
+Hold1        pin; "1st Control Signal for hold
+Hold2		pin; "2nd Hold Control Signal
+Load	pin; "Load Signal
+
+
+
+" Clock Input
+
+Clock           pin;                    "clock
+
+
+" Outputs
+ProgAddr12..ProgAddr0   pin ISTYPE 'KEEP';       "Program Address Bus Outputs 
+PC12..PC0       pin ISTYPE 'KEEP, REG';      " Program Counter Outputs
+
+
+" Intermediate Terms
+"Load    node	ISTYPE 'KEEP';     Determines whether to set PC to 0
+AdderInputTwo12..AdderInputTwo0 node; "Input into Adder from mux
+Carry13..Carry0    node;
+
+" Buses
+AdderInputTwo = [AdderInputTwo12..AdderInputTwo0];  "Input of Mux into Adder
+ONE = [0,0,0,0,0,0,0,0,0,0,0,0,1];     "13-bit one
+ProgAddr = [ProgAddr12..ProgAddr0]; "Program Address Bus Outputs
+PC = [PC12..PC0];       "Program Counter
+Direct = [Direct12..Direct0];   "Direct Addressing
+OffsetSigned = [Offset7, Offset7, Offset7, Offset7, Offset7, Offset7..Offset0];
+HoldOne = [PC12..PC8,Offset7..Offset0];
+HoldTwo = [Offset4..Offset0,PC7..PC0];
+Carry = [Carry13..Carry0];
+
+
+
+EQUATIONS
+
+
+" clocks for all of the outputs
+
+PC.CLK   =  Clock;                      " use the clock input
+PC.CLR = Reset;
+
+
+
+" Functional Equations
+
+AdderInputTwo = (DirectJMP & Direct) # (OffsetSigned & RelativeJMP) # (ONE & Normal) # (HoldOne & Hold1) # (HoldTwo & Hold2);
+
+Carry[0] = 0;
+
+
+Carry[13..1] = (((PC & !Load) & AdderInputTwo) # (Carry[12..0] & ((PC & !Load) $ AdderInputTwo)));
+PC := (((PC & !Load) $ AdderInputTwo) $ Carry[12..0]);
+
+ProgAddr = PC;
+
+
+END  ProgramAccess
+
+
+

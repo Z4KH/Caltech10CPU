@@ -1,0 +1,115 @@
+MODULE      DataAccess
+INTERFACE  (Offset7..Offset0,
+                       Off, AddressS, AddressX, Decrement, PreSelect, IncDecEnable,
+                       Reset, Clock
+                       -> DataAddr7..DataAddr0, XReg7..XReg0, SReg7..SReg0);
+
+TITLE      'Data Address Unit'
+
+
+" Description:  This module is the file for the data address unit. The module determines the
+"               address for data that will be used in the instructions and outputs the address
+"               onto the data address bus.
+"
+" Inputs:       
+"               Offset[7..0]  - 8 bits of offset input
+"               Off         - Control Signal to set the offset to a value(inputted in offset7..offset0)
+"               AddressS    - control signal to write to the S register
+"               AddressX    - control signal to write to the X register
+"               Decrement   - control signal to signify decrement(active high) or increment(active low)
+"               PreSelect   - control signal to signify preincrement/decrement(active high) or postincrement/decrement(active low)
+"		        IncDecEnable - Enables the Data Address Output to increment or decrement
+"               Reset            - system reset
+"               Clock            - system clock
+"
+" Outputs:      DataAddr[7..0] - 8 bits of address output to the data address bus
+"               XReg[7..0]       - 8 bits of X register output
+"               SReg[7..0]       - 8 bits of S register output
+
+
+" Revision History:
+" 03/02/24   Zachary Pestrikov  Wrote File and Designed Logic for Data Address Unit
+" 03/05/24   Zachary Pestriokv	Debugged File, Adjusted Control Signals
+" 03/06/24   Zachary Pestrikov	Debugged, Edited Structure, Finalized Design
+
+
+
+" Pin/Signal Declarations
+
+" Inputs
+
+Offset7..Offset0	pin;    "input 8-bit offset
+
+"Control Signal Inputs as specified in Description
+Off pin;
+AddressS    pin;
+AddressX    pin;
+Decrement   pin;
+PreSelect   pin;
+IncDecEnable	pin;
+
+Reset			pin;	"input  system reset
+
+Clock           	pin;	"input  system clock
+
+
+" Outputs
+
+DataAddr7..DataAddr0	pin ISTYPE 'KEEP';	"8 bits of address output
+
+XReg7..XReg0		pin ISTYPE 'KEEP, REG';	"8 bits of X register
+SReg7..SReg0		pin	ISTYPE 'KEEP, REG';	"8 bits of S register
+
+
+" Intermediate Terms
+Address7..Address0  node;   "Address that is selected to be input into adder
+IncDecAddress7..IncDecAddress0  node;   "Address after increment or decrement
+IncDecCarry8..IncDecCarry0  node; "Carryin to each bit in incrementer/decrementer
+AdderCarry8..AdderCarry0    node;    "Carry used in adder into bit i
+AdderInAddr7..AdderInAddr0	node;	"address input to adder
+
+
+
+" Buses
+
+DataAddr    =  [DataAddr7..DataAddr0];		"data address bus
+Offset = [Offset7..Offset0];    "8 bits of offset
+XReg       =  [XReg7..XReg0];			"8 bit X-Register
+SReg       =  [SReg7..SReg0];			"8 bit S-Register
+Address = [Address7..Address0];      "address selected from sources
+IncDecAddress = [IncDecAddress7..IncDecAddress0];   "Address after increment or decrement
+IncDecCarry = [IncDecCarry8..IncDecCarry0]; "Carryin to each bit in incrementer/decrementer
+AdderCarry = [AdderCarry8..AdderCarry0];    "Carry used in adder into bit i
+AdderInAddr = [AdderInAddr7..AdderInAddr0];	"address input to adder
+
+
+EQUATIONS
+
+
+"Connect up module
+XReg.CLK = Clock;
+XReg.CLR = Reset;
+SReg.CLK = Clock;
+SReg.CLR = Reset;
+
+"Address Select 
+Address = (AddressS & SReg) # (AddressX & XReg);	"address sources are the S register and the X register	
+
+"Incrementer/Decrementer
+IncDecCarry[0] = 1;	" lowest bit must flip
+IncDecCarry[8..1] = IncDecCarry[7..0] & (Address[7..0] $ Decrement);	"carry is just the carry in an addder with operand B set to active high decrement
+IncDecAddress = (((Address $ IncDecCarry[7..0]) & IncDecEnable)) # (Address & !IncDecEnable);	"output of the incrementer decrementer, must be enabled to increment/decremenet
+
+AdderInAddr = (IncDecAddress & PreSelect) # (Address & !PreSelect);
+
+"Adder 
+AdderCarry[0] = 0;	"carry into the first bit of the sum is always 0
+AdderCarry[8..1] = (AdderInAddr[7..0] & (Off & Offset[7..0])) # ((AdderInAddr[7..0] $ (Off & Offset[7..0])) & AdderCarry[7..0]);	"the carry out of bit i into bit (i+1)
+DataAddr = (AdderInAddr $ (Off & Offset)) $ AdderCarry[7..0];	"the sum of the address source and offset source
+
+
+XReg := (IncDecAddress & AddressX) # (XReg & !AddressX);	"the x register is either inc/dec or holds
+SReg := (IncDecAddress & AddressS) # (SReg & !AddressS);	"the s register is either inc/dec or holds
+
+
+END  DataAccess

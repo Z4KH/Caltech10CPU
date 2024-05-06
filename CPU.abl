@@ -1,0 +1,217 @@
+MODULE      CPU
+TITLE      'Caltech10 CPU'
+
+
+" Description:  This is a template file for implementing the Caltech10 CPU.
+"               It is the top-level module which will instantiate and connect
+"               all other modules.
+"
+" Inputs:         ProgramDB[15..0]  - the 16-bit program data bus
+"                 Reset             - system reset signal
+"                 Clock             - system clock
+"
+" I/O:            DataDB[7..0]      - the 8-bit data data bus
+"
+" Outputs:        ProgramAB[12..0]  - the 13-bit program address bus
+"                 DataAB[7..0]      - the 8-bit data address bus
+"                 RD                - read signal for the data data bus
+"                 WR                - write signal for the data data bus
+"                 IO                - memory (0) or I/O (1) is being accessed
+"
+" Status Outputs: Accum[7..0]       - the 8-bit accumulator
+"                 Flags[7..0]       - the 8-bit flag register
+"                 XReg[7..0]        - the 8-bit X register
+"                 SReg[7..0]        - the 8-bit S register
+
+
+" Revision History:
+" 02/15/18   Glen George  Initial Revision
+" 01/05/21   Glen George  Updated comments
+" 03/09/24   Zachary Pestrikov  Added Modules
+" 03/10/24   Zachary Pestrikov	Added Module Inputs,
+" 03/11/24   Zachary Pestrikov	Finalized Control Signals and Module Inputs
+" 03/12/24   Zachary Pestrikov  Added Documentation and CALL/RTS instructions
+
+
+
+" Pin/Signal Declarations
+
+" Inputs
+
+ProgramDB15..ProgramDB0	pin;	"input  16-bit instruction data bus
+Reset           	pin;	"input  system reset signal
+Clock           	pin;	"input  system clock
+
+
+" I/O
+
+DataDB7..DataDB0	pin;	"I/O  8-bit Data data bus
+
+
+" Outputs
+
+ProgramAB12..ProgramAB0	pin;	"output  the 13-bit Program address bus
+DataAB7..DataAB0	pin;	"output  the 8-bit Data address bus
+RD			pin;	"output  read signal for the Data data bus
+WR			pin;	"output  write signal for the Data data bus
+IO			pin;	"output  accessing memory (0) or I/O (1)
+
+
+" Debugging/Status Outputs
+
+Accum7..Accum0		pin	;"	the 8-bit accumulator
+Flags7..Flags0		pin	ISTYPE 'KEEP';"	the flags (8 bits)
+XReg7..XReg0		pin;	"the 8-bit X register
+SReg7..SReg0		pin;	"	""the 8-bit S register
+
+											
+
+
+" Internal signals
+NotPUSHF	node;	"simplifies readibility, high => instruction register does not hold pushf
+POPF		node;	"simplifies readibility, high => popf in instruction register
+
+
+" declare the used modules
+
+"Program Access Unit
+ProgramAccess INTERFACE   (Offset7..Offset0, Direct12..Direct0,
+                          Load, DirectJMP, RelativeJMP, Reset, Normal,
+                          Clock, Hold1, Hold2
+                          -> ProgAddr12..ProgAddr0, PC12..PC0);
+
+"Arithmetic Logic Unit
+ALU INTERFACE   (Data7..Data0,
+                Op3..Op0, SelectAdd, FlagsEnable, AddSub, LoadFlags, InstructionControl2..InstructionControl0, InvertCarry,
+                Reset, Clock
+                -> Accum7..Accum0, Flags7..Flags0);
+
+"Data Access Unit
+DataAccess INTERFACE  (Offset7..Offset0,
+                       Off, AddressS, AddressX, Decrement, PreSelect, IncDecEnable,
+                       Reset, Clock
+                       -> DataAddr7..DataAddr0, XReg7..XReg0, SReg7..SReg0);
+
+"Control Unit
+ControlUnit INTERFACE (ProgramDB15..ProgramDB0, Flags7..Flags0, Reset, Clock 
+                        -> Op3..Op0, SelectAdd, FlagsEnable,
+                        AddSub, LoadFlags, InstructionControl2..InstructionControl0, InvertCarry,
+                        Off, AddressS, AddressX, Decrement, PreSelect, IncDecEnable,
+                        Load, DirectJMP, RelativeJMP, Normal,
+                        Hold1, Hold2, Read, Write, IR15..IR0,
+			CallUpper, CallLower, CallAddress15..CallAddress0, CallJMP, Return);
+
+" create instances of the modules
+PAUnit FUNCTIONAL_BLOCK ProgramAccess;
+ALUnit FUNCTIONAL_BLOCK ALU;
+DAUnit FUNCTIONAL_BLOCK DataAccess;
+CUnit  FUNCTIONAL_BLOCK ControlUnit;
+
+
+" Busses
+
+ProgramAB  =  [ProgramAB12..ProgramAB0];"13-bit Program address bus
+ProgramDB  =  [ProgramDB15..ProgramDB0];"16-bit Program data bus
+DataAB     =  [DataAB7..DataAB0];	"8-bit Data address bus
+DataDB     =  [DataDB7..DataDB0];	"8-bit Data data bus
+Accum      =  [Accum7..Accum0];     "8-bit accumulator
+Flags      =  [Flags7..Flags0];     "8-bit status register with the flags
+XReg       =  [XReg7..XReg0];       "8-bit X Register
+SReg       =  [SReg7..SReg0];       "8-bit S Register												
+
+
+EQUATIONS
+
+
+
+POPF = !CUnit.IR15 & !CUnit.IR14 & !CUnit.IR13 & !CUnit.IR12 & CUnit.IR9 & !CUnit.IR10;	"Enoces bits of POPF For Readibility
+
+"Connect up the module inputs
+"Control Unit
+CUnit.[ProgramDB15..ProgramDB0] = ProgramDB;
+CUnit.[Flags7..Flags0] = ALUnit.[Flags7..Flags0];
+CUnit.Reset = Reset;
+CUnit.Clock = Clock;
+
+"Program Access Unit
+PAUnit.[Offset7..Offset0] = (CUnit.[IR7..IR0] & !CUnit.Return) # (DataDB & CUnit.Return);		"Offset is equal to the dataDB for return, or the offset from the instruction
+PAUnit.[Direct12..Direct0] = (CUnit.[IR12..IR0] & !CUnit.CallJMP) # (CUnit.[CallAddress12..CallAddress0] & CUnit.CallJMP);
+PAUnit.Load = CUnit.Load;
+PAUnit.DirectJMP = CUnit.DirectJMP;
+PAUnit.RelativeJMP = CUnit.RelativeJMP;
+PAUnit.Reset = Reset;
+PAUnit.Normal = CUnit.Normal;
+PAUnit.Clock = Clock;
+PAUnit.Hold1 = CUnit.Hold1;
+PAUnit.Hold2 = CUnit.Hold2;
+
+"Arithmetic Logic Unit
+ALUnit.[Data7..Data0] = (DataDB & RD) # (CUnit.[IR7..IR0] & !RD & !POPF);	"Offset is either equal to the dataDB when retrieving data from memory, or the offset from the instruction
+ALUnit.[Op3..Op0] = CUnit.[Op3..Op0];
+ALUnit.SelectAdd = CUnit.SelectAdd;
+ALUnit.FlagsEnable = CUnit.FlagsEnable;
+ALUnit.AddSub = CUnit.AddSub;
+ALUnit.LoadFlags = CUnit.LoadFlags;
+ALUnit.[InstructionControl2..InstructionControl0] = CUnit.[InstructionControl2..InstructionControl0];
+ALUnit.InvertCarry = CUnit.InvertCarry;
+ALUnit.Reset = Reset;
+ALUnit.Clock = Clock;
+
+"Data Access Unit
+DAUnit.[Offset7..Offset0] = (CUnit.[IR7..IR0] & !CUnit.Hold1 & !CUnit.Hold2) # (DataDB & (CUnit.Hold1 # CUnit.Hold2));	"The instruction specifices the offset, or the offset comes from the value in the S register during RTS
+DAUnit.Off = CUnit.Off;
+DAUnit.AddressS = CUnit.AddressS;
+DAUnit.AddressX = CUnit.AddressX;
+DAUnit.Decrement = CUnit.Decrement;
+DAUnit.PreSelect = CUnit.PreSelect;
+DAUnit.IncDecEnable = CUnit.IncDecEnable;
+DAUnit.Reset = Reset;
+DAUnit.Clock = Clock;
+
+NotPUSHF = !(!CUnit.IR15 & !CUnit.IR14 & !CUnit.IR13 & !CUnit.IR12 & CUnit.IR11);	"Encodes bits of PUSHF for readibility
+
+
+"Connect Up the Register Outputs
+Accum = ALUnit.[Accum7..Accum0];
+Flags = ALUnit.[Flags7..Flags0];
+XReg  = DAUnit.[XReg7..XReg0];
+SReg  = DAUnit.[SReg7..SReg0]; 
+
+"Outputs
+RD = CUnit.Read;
+WR = CUnit.Write;
+
+"Connect Up the Busses
+"DataDataBus either Flags or accumulator, or an address from memory when reading, or the program counter during a call instruction
+"When using the flags, bits 6 and 4 are irrelevant
+DataDB = ([Flags7, 0, Flags5, 0, Flags3..Flags0] & (!(CUnit.IR15 # CUnit.IR14 # CUnit.IR13 # CUnit.IR12) & CUnit.IR11)) 
+	# (Accum & NotPUSHF & !RD & !CUnit.CallUpper & !CUnit.CallLower) # (DataDB & RD)
+	# ([0, 0, 0, ProgramAB12, ProgramAB11, ProgramAB10, ProgramAB9, ProgramAB8] & CUnit.CallUpper) # (ProgramAB[7..0] & CUnit.CallLower);	"Call
+
+"DataAddressBus always comes out of data memory unit
+DataAB = DAUnit.[DataAddr7..DataAddr0];
+
+"ProgramAddressBus always comes out of the program memory unit, or it is loaded during call
+ProgramAB = PAUnit.[ProgAddr12..ProgAddr0];	
+
+" output enables
+
+" Data data bus is enabled when writing
+DataDB.OE  =  CUnit.Write;
+
+
+" most signals are always enabled
+ProgramAB.OE         =  ^h1FFF;
+DataAB.OE            =  ^hFF;
+RD.OE                =  1;
+WR.OE                =  1;
+IO.OE                =  1;
+[Accum7..Accum0].OE  =  ^hFF;
+[Flags7..Flags0].OE  =  ^hFF;
+[XReg7..XReg0].OE    =  ^hFF;
+[SReg7..SReg0].OE    =  ^hFF;
+
+"extra credit
+IO = 0;
+
+END  CPU

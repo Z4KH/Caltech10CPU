@@ -1,0 +1,130 @@
+MODULE      ALU
+INTERFACE   (Data7..Data0,
+                Op3..Op0, SelectAdd, FlagsEnable, AddSub, LoadFlags, InstructionControl2..InstructionControl0, InvertCarry,
+                Reset, Clock
+                -> Accum7..Accum0, Flags7..Flags0);
+
+TITLE      'ALU Unit'
+
+
+" Description:  This module is the accumulator based ALU block in the Caltech10 CPU.
+"               It executes all bit and logic operations based on the inputs from the
+"               accumulator and a second operand, DataOff7..Data0. It then generates the
+"               status flags and put the result of the instruction into the accumulator.
+"
+" Inputs:       Data7..Data0    - 8 bits of Operand B input
+"               Op3..Op0   - Control signals for F-Block, Signifies the logical operator
+"               SelectAdd, Select Shift/Rot   - control signals for determining which result to select; from the adder, or the shifter/rotator(may be used later if I do extra credit)
+"               FlagsEnable  - control signal to signify whether to allow the carry, overflow flags to change
+"               AddSub - control signal to signify whether result is from adder(Active High) or F-block(active low)
+"		        LoadFlags - Signals to Load offset into flags
+"		InvertCarry	-- Control Signal to determine whether or not to invert carry in subtract and decrement
+
+
+"               InstructionControl2..0 - Encoded Control Signals
+"               [000] => None
+"               [001] => Increment
+"               [010] => Decrement
+"               [011] => Adc
+"		[100] => SBB
+"		[110] => SB
+"		[111] => Hold Flags
+"   
+"               Clock            - system clock
+"               Reset   - system reset
+"
+" Outputs:      AccumAddr7..Accum0 - 8 bits of accumulator output
+"               Flags7..Flags0      - 8 bits of flag output (active low)
+
+
+" Revision History:
+" 03/02/2024    Zachary Pestrikov    Wrote File, and Added Initial Logic for ALU
+" 03/03/2024    Zachary Pestrikov    Added Instructions to ALU
+" 03/04/2024    Zachary Pestrikov    Debugged ALU and Demoed 
+" 03/12/2024    Zachary Pestrikov    Removed Shifter/Rotator Entirely
+
+
+
+" Pin/Signal Declarations
+
+" Inputs
+
+Data7..Data0	pin;	"input  8-bit data/offset input
+
+" control signals input
+Op3..Op0    pin;
+SelectAdd   pin;
+FlagsEnable  pin;
+AddSub pin;
+LoadFlags	pin;
+InstructionControl2..InstructionControl0	pin;
+InvertCarry	pin;
+
+Reset			pin;	"input  system reset
+
+Clock           	pin;	"input  system clock
+
+
+" Outputs
+
+Accum7..Accum0	pin ISTYPE 'KEEP, REG';	"8 bits of accumulator
+
+Flags7..Flags0	pin  ISTYPE 'KEEP, REG';   " the flags (8 bits) 3..0 are C,O,S,Z 
+
+
+" Intermediate Terms
+InputAdder7..InputAdder0    node; " non-F-block inputs into adder(either accumulator or 0)
+Carry8..Carry0      node; "Carry Out of bit i into bit i+1
+Fout7..Fout0    node; "Output of F Block
+AdderOut7..AdderOut0 node; "Output of Adder
+ZeroCompute node	ISTYPE 'KEEP';   "Computed Zero Flag
+SignedCompute   node	ISTYPE 'KEEP'; "Computed Signed flag
+CarryCompute    node	ISTYPE 'KEEP';   "Computed Carry Flag
+OverflowCompute node	ISTYPE 'KEEP';   "Computed Overflow Flag
+
+
+" Buses
+
+Data    =  [Data7..Data0];		"8 bits of data or offset (Operand B)
+Fop   =   [Op3..Op0];     "control signals for F Block encoding operations
+Accum  =  [Accum7..Accum0];	"accumulator (8 bits)
+Flags      =  [Flags7..Flags0];			"the flags (8 bits)
+Fout = [Fout7..Fout0];      "Output of F Block
+InputAdder = [InputAdder7..InputAdder0];    " Non-F-Block Input into Adder (Either accumulator or 0)
+AdderOut = [AdderOut7..AdderOut0];   "8 bit Output of Adder
+Carry = [Carry8..Carry0];   "Carries used in Adder (Out of bit i into bit i+1)
+ONES = [1,1,1,1,1,1,1,1];
+
+
+EQUATIONS
+
+"Connect Clocks/Resets
+Accum.CLK = Clock;
+Accum.CLR = Reset;
+Flags.CLK = Clock;
+Flags.CLR = Reset;
+
+"F Block
+Fout = (Op0 & !Accum & !Data) # (Op1 & !Accum & Data) # (Op2 & Accum & !Data) # (Op3 & Accum & Data);   
+
+"adder
+InputAdder = (Accum & AddSub) # (ONES & InstructionControl1 & !AddSub);
+Carry[0] = (InstructionControl2 & InstructionControl1) # ((InstructionControl0 & !InstructionControl1)) # (Flags[3] & InstructionControl1 & InstructionControl0) # (!Flags[3] & InstructionControl2 & !InstructionControl1 & !InstructionControl0); "Carryin to bit 0 is either 1, 0, the carry flag, or the inverted carry flag
+Carry[8..1] = (InputAdder[7..0] & Fout[7..0]) # ((InputAdder[7..0] $ Fout[7..0]) & Carry[7..0]);
+AdderOut[7..0] = (InputAdder[7..0] $ Fout[7..0]) $ Carry[7..0];
+
+"Accumulator Result
+Accum = (AdderOut & SelectAdd) # (!SelectAdd & Accum);	"Accumulator result is either from the adder or it holds from the previous result
+
+"Flags
+ZeroCompute = !(AdderOut7 # AdderOut6 # AdderOut5 # AdderOut4 # AdderOut3 # AdderOut2 # AdderOut1 # AdderOut0); "Zero Flag is true iff all bits of output are 0
+SignedCompute = AdderOut7 & !ZeroCompute; "Signed Flag is just highest bit of output.
+CarryCompute = (((Carry8 & FlagsEnable) # (Flags3 & !FlagsEnable)) & !InvertCarry) # (!Carry8 & InvertCarry);    "Carry is selected from adder or shifter/rotator, and can be inverted
+OverflowCompute = ((Carry7 $ Carry8) & FlagsEnable) # (Flags2 & !FlagsEnable); "If carry in to last bit and carry out of last bit are different, then the sign of the sum is wrong => overflow, flags either change or hold
+
+Flags[3..0] := ([CarryCompute, OverflowCompute, SignedCompute, ZeroCompute] & !(InstructionControl2 & InstructionControl1 & InstructionControl0) & !LoadFlags) 
+		# (Flags[3..0] & InstructionControl2 & InstructionControl1 & InstructionControl0 & !LoadFlags) 
+		# (Data[3..0] & LoadFlags);	"Flags are either the computed flags, the offset, or they hold
+Flags[7..4] := (Data[7..4] & LoadFlags) # (Flags[7..4] & !LoadFlags);	"Flags 7..4 are irrelevant to the ALU
+
+END ALU
