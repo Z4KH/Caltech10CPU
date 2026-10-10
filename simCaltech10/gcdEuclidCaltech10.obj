@@ -1,5 +1,5 @@
-; Zachary Pestrikov EE/CS10a HW 5
-; This routine computes the greatest common divisor of two numbers, a and b 
+; Euclidean GCD routine by Zachary Pestrikov
+; This routine computes the greatest common divisor of two numbers, a and b
 ; This routine implements Euclid's Subtraction Algorithm into the Caltech10 CPU
 ; It is an O(2^n) Algorithm
 ; 8-bit Values a and b are stored in memory, and the GCD of the two values are returned
@@ -37,7 +37,7 @@
 0013 8000;    LDD a           ;load a
 0014 C007;    JMP COMPARISON       ;if not 0, continue with loop
 0015 1F80;    NOP
-    
+
 
 ;0016 SWAP                ;swap a and b
 0016 0780;	TAX			    ;put a in X temporariliy
@@ -55,10 +55,5 @@
 
 
 ;Variables
-;00  ??  a   DB  ?   ;the variable a 
-;01  ??  b   DB  ?   ;the variable b 
-
-
-
-    
-
+;00  ??  a   DB  ?   ;the variable a
+;01  ??  b   DB  ?   ;the variable b
